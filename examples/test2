@@ -1,4 +1,4 @@
 # This is an example / test pipeline
 #
-print "Hello world"
+print "Hello world2"
 include "test2_include"
