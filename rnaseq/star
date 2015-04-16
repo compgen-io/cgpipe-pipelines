@@ -281,7 +281,7 @@ endif
         job.name = "bam-uniq"
         job.stack="10M"
     %>
-    ngsutilsj bam-filter --unique-mapping $< $>.tmp && mv $>.tmp $>
+    ngsutilsj bam-filter --mapped --unique-mapping $< $>.tmp && mv $>.tmp $>
 
 %.counts.txt: %.bam %.bam.bai
     <%
