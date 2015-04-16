@@ -50,7 +50,8 @@
 #Required software: STAR, bwa, samtools, ngsutilsj, NGSUtils/bamutils
 #
 #History:
-#    2015-03-31 - mbreese - Initial commit to git repository
+#    2015-04-16 - mbreese - Initial commit to git repository, working with
+#                           current CGPipe syntax
 #
 
 if !ref
