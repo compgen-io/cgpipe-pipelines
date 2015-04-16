@@ -22,6 +22,7 @@
 #                     Default: ./mapping/sample_name
 #  --maxprocs N       The maximum number of threads to use in mapping
 #                     Default: all
+#  --uniquebam        Produce a BAM output file with only uniquely mapped reads
 #
 #Read QC filtering options:
 #  --filter.minlen N             The minimum allowed length of a read post QC
@@ -143,12 +144,16 @@ __setup__:
     mkdir -p logs
     mkdir -p jobs
 
-
+outs = ["${basedir}/${sample}${org}.bam.stats.txt", ]
 if gtf
-    all: ${basedir}/${sample}${org}.counts.txt ${basedir}/${sample}${org}.bam.stats.txt
-else
-    all: ${basedir}/${sample}${org}.bam.stats.txt
+    outs += "${basedir}/${sample}${org}.counts.txt"
 endif
+if uniquebam
+    outs += "${basedir}/${sample}${org}.uniq.bam.stats.txt"
+endif
+
+all: @{outs}
+
 
 ## filter and merge split fastq files
 %.filtered.fastq.gz: ${fq1} ${fq2}
@@ -269,6 +274,14 @@ endif
     ngsutilsj bam-stats --tags NH:i \
     <% if gtf %> --gtf ${gtf} \<% endif %>
     $< > $>.tmp && mv $>.tmp $>
+
+%.uniq.bam: %.bam
+    <%
+        job.walltime="2:00:00"
+        job.name = "bam-uniq"
+        job.stack="10M"
+    %>
+    ngsutilsj bam-filter --unique-mapping $< $>
 
 %.counts.txt: %.bam %.bam.bai
     <%
