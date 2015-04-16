@@ -1,0 +1,282 @@
+#!/usr/bin/env cgpipe
+#STAR-based RNAseq pipeline
+#
+#Required inputs:
+#  --ref fname   The reference index path (STAR index path)
+#  --fq fname    Input in interleaved FASTQ, unpaired FASTQ, or unaligned BAM format
+#  --fq1 fname   First of pair in FASTQ format
+#  --fq2 fname   Second of pair in FASTQ format
+#
+#          Note: You can only use --fq or --fq1/--fq2 - not both!
+#
+#Mapping options:
+#  --org val          The name of the reference genome (hg19, mm10, etc...)
+#  --seqfilter fname  A BWA indexed file to use as a filter
+#                     Note: you can have more than one!
+#  --paired           Is the FASTQ file paired? 
+#                     Default: true
+#  --sample name      The sample name to use
+#                     Default: FASTQ input name, with .fastq, .gz, .bam, _R1,
+#                              etc... removed
+#  --outdir path      The default directory to write results to 
+#                     Default: ./mapping/sample_name
+#  --maxprocs N       The maximum number of threads to use in mapping
+#                     Default: all
+#
+#Read QC filtering options:
+#  --filter.minlen N             The minimum allowed length of a read post QC
+#                                trimming
+#                                Default: 45
+#  --filter.allowed_wildcard N   The maximum allowed wildcard (N) base calls
+#                                Default: 2
+#
+#  Note: ngsutilsj fastq-filter is used for FASTQ filtering
+#
+#Gene read counting options (optional):
+#  --gtf fname                If a GTF file is given, then gene-level counts will
+#                             be obtained
+#  --count.library_type val   The orientation of the library
+#                             Valid: FR, RF, unstranded; Default: RF
+#  --count.multiple val       How to handle reads that map to multiple locations
+#                             in the genome.
+#                             Valid: ignore, partial, complete; Default: ignore
+#  --count.fpkm               Calculate FPKM for each gene
+#                             Default: false
+#  --count.norm val           How to normalize reads for FPKM
+#                             Valid: all, mapped, median
+#
+#  Note: bamutils count is used for gene read counting
+#
+#Required software: STAR, bwa, samtools, ngsutilsj, NGSUtils/bamutils
+#
+#History:
+#    2015-03-31 - mbreese - Initial commit to git repository
+#
+
+if !ref
+    print "ERROR: Missing reference index!"
+    exit 1
+endif
+
+if !fq && !fq1
+    print "ERROR: You need to specify a FASTQ input file"
+    exit 1
+endif
+
+if fq && fq1
+    print "ERROR: You can not specify both --fq and --fq1!"
+    exit 1
+endif
+
+if fq1 && !fq2
+    print "ERROR: Missing read pair! (--fq1 without --fq2)"
+    exit 1
+endif
+
+runid ?= "run.$(date +%Y%m%d-%H%M%S)"
+cgpipe.log = "logs/rnaseq-${runid}.log"
+cgpipe.joblog = "logs/outfile.txt"
+
+if org
+    org = ".${org}"
+else
+    org = ""
+endif
+
+if !sample
+    if ${fq1}
+        sample=$(basename "${fq1}" | sed -e 's/.gz$//' | sed -e 's/.fastq//' |  sed -e 's/.fq//' | sed -e 's/_R1//')
+    else
+        sample=$(basename "${fq}" | sed -e 's/.bam$//' | sed -e 's/.gz$//' | sed -e 's/.fastq$//')
+    endif
+endif
+
+log "Processing sample: ${sample}"
+
+job.procs = 1
+job.stdout="jobs/"
+job.stderr="jobs/"
+outdir ?= "mapping"
+basedir = "${outdir}/${sample}"
+paired ?= true
+filter.minlen ?= 45
+filter.allowed_wildcard ?= 2
+count.library_type ?= "RF"
+count.multiple ?= "ignore"
+maxprocs ?= cgpipe.procs
+
+missing_files = false
+if $(which STAR) == ""
+    print "Missing program from PATH: STAR"
+    missing_files = true
+endif
+if $(which samtools) == ""
+    print "Missing program from PATH: samtools ${$\?}"
+    missing_files = true
+endif
+if $(which ngsutilsj) == ""
+    print "Missing program from PATH: ngsutilsj"
+    missing_files = true
+endif
+if $(which bamutils) == ""
+    print "Missing program from PATH: bamutils"
+    missing_files = true
+endif
+if $(which bwa) == ""
+    print "Missing program from PATH: bwa"
+    missing_files = true
+endif
+
+if missing_files
+    exit 1
+endif
+
+
+__pre__:
+    export SOCKET_ETA=/tmp/eta-$JOB_ID
+    export IO_COMPGEN_COMMON_PROGRESS_SOCKET=/tmp/eta-$JOB_ID
+
+__setup__:
+    <% job.shexec = true %>
+    mkdir -p ${basedir}
+    mkdir -p logs
+    mkdir -p jobs
+
+
+if gtf
+    all: ${basedir}/${sample}${org}.counts.txt ${basedir}/${sample}${org}.bam.stats.txt
+else
+    all: ${basedir}/${sample}${org}.bam.stats.txt
+endif
+
+## filter and merge split fastq files
+%.filtered.fastq.gz: ${fq1} ${fq2}
+    <%
+        job.walltime="48:00:00"
+        job.name="fastq-merge-filter"
+        job.stack="10M"
+    %>
+    ngsutilsj fastq-merge ${fq1} ${fq2} | \
+    ngsutilsj fastq-filter --wildcard ${filter.allowed_wildcard} --size ${filter.minlen} --suffixqual '#' \
+    <% if paired %>  --paired \<% endif %>
+    $< | gzip > $>.tmp && mv $>.tmp $>
+
+## filter an existing merged fastq file (or unmapped BAM file)
+%.filtered.fastq.gz: ${fq}
+    <%
+        job.walltime="48:00:00"
+        job.name="fastq-filter"
+        job.stack="10M"
+    %>
+    ngsutilsj fastq-filter --wildcard ${filter.allowed_wildcard} --size ${filter.minlen} --suffixqual '#' \
+    <% if paired %>  --paired \<% endif %>
+    $< | gzip > $>.tmp && mv $>.tmp $>
+
+%_fastqc.zip: %.fastq.gz
+    <%
+    job.walltime="2:00:00"
+    job.name="fastqc"
+    %>
+    fastqc -o ${basedir} --noextract $<1
+
+%.fastq.stats.txt: %.fastq.gz
+    <%
+        job.walltime="8:00:00"
+        job.name="fastq-stats"
+    %>
+    fastqutils stats $< > $>.tmp && mv $>.tmp $>
+
+if seqfilter
+    %.seqfilter.bam: %.filtered.fastq.gz
+        <%
+            job.procs = 3
+            job.walltime="8:00:00"
+            job.name="seqfilter-bam"
+        %>
+        bwa mem \
+        <% if paired %> -p \<% endif %>
+        -M -t 2 ${seqfilter} $< | samtools view -bS - > $>.tmp && mv $>.tmp $>
+
+    %.seqfiltered.fastq.gz: %.seqfilter.bam
+        <%
+            job.walltime="12:00:00"
+            job.name="seqfilter-fastq"
+            job.stack="10M"
+        %>
+        <% if paired %>
+            ngsutilsj fastq-filter --paired $< | gzip > $>.tmp && mv $>.tmp $>
+        <% else %>
+            ngsutilsj bam-tofastq $< | gzip > $>.tmp && mv $>.tmp $>
+        <% endif %>
+
+    %${org}.bam: %.seqfiltered.fastq.gz
+        <% 
+            job.procs=maxprocs
+            job.walltime="12:00:00"
+            job.name="star-align"
+            job.mem="32G"
+        %>
+        STAR --genomeDir ${ref} \
+        <% if paired %>
+            --readFilesIn <(ngsutilsj fastq-separate -1 $<1) <(ngsutilsj fastq-separate -2 $<1) \
+        <% else %>
+            --readFilesIn $<1 --readFilesCommand zcat \
+        <% endif %>
+        --runThreadN ${job.procs} \
+        --outFileNamePrefix ${basedir}/ \
+        --outSAMunmapped Within \
+        --outStd SAM \
+        --outFilterIntronMotifs RemoveNoncanonical \
+        | samtools view -Sbu - | samtools sort - $>.tmp && mv $>.tmp.bam $>
+
+else
+    %${org}.bam: %.filtered.fastq.gz
+        <% 
+            job.procs=maxprocs
+            job.walltime="12:00:00"
+            job.name="star-align"
+            job.mem="32G"
+        %>
+        STAR --genomeDir ${ref} \
+        <% if paired %>
+            --readFilesIn <(ngsutilsj fastq-separate -1 $<1) <(ngsutilsj fastq-separate -2 $<1) \
+        <% else %>
+            --readFilesIn $<1 --readFilesCommand zcat \
+        <% endif %>
+        --runThreadN ${job.procs} \
+        --outFileNamePrefix ${basedir}/ \
+        --outSAMunmapped Within \
+        --outStd SAM \
+        --outFilterIntronMotifs RemoveNoncanonical \
+        | samtools view -Sbu - | samtools sort - $>.tmp && mv $>.tmp.bam $>
+endif
+
+%.bam.bai: %.bam
+    <%
+        job.walltime="2:00:00"
+        job.name = "bam-index"
+    %>
+    samtools index $<1
+
+%.bam.stats.txt: %.bam
+    <%
+        job.walltime="12:00:00"
+        job.name = "bam-stats"
+        job.mem="4G"
+        job.stack="10M"
+    %>
+    ngsutilsj bam-stats --tags NH:i \
+    <% if gtf %> --gtf ${gtf} \<% endif %>
+    $< > $>.tmp && mv $>.tmp $>
+
+%.counts.txt: %.bam %.bam.bai
+    <%
+        job.walltime="30:00:00"
+        job.name="bam-count"
+        job.mem="12G"
+    %>
+    bamutils count -gtf ${gtf} -library ${count.library_type} -multiple ${count.multiple} \
+    <% if count.fpkm %>
+        -fpkm -norm ${count.norm} \
+    <% endif %>
+        $<1 > $>.tmp && mv $>.tmp $>
