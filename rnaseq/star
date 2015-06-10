@@ -13,7 +13,7 @@
 #  --org val          The name of the reference genome (hg19, mm10, etc...)
 #  --seqfilter fname  A BWA indexed file to use as a filter
 #                     Note: you can have more than one!
-#  --paired           Is the FASTQ file paired? 
+#  --paired val       Is the FASTQ file paired? 
 #                     Default: true
 #  --sample name      The sample name to use
 #                     Default: FASTQ input name, with .fastq, .gz, .bam, _R1,
@@ -100,7 +100,9 @@ job.stdout="jobs/"
 job.stderr="jobs/"
 outdir ?= "mapping"
 basedir = "${outdir}/${sample}"
+
 paired ?= true
+
 filter.minlen ?= 45
 filter.allowed_wildcard ?= 2
 count.library_type ?= "RF"
@@ -224,7 +226,7 @@ if seqfilter
         %>
         STAR --genomeDir ${ref} \
         <% if paired %>
-            --readFilesIn <(ngsutilsj fastq-separate -1 $<1) <(ngsutilsj fastq-separate -2 $<1) \
+            --readFilesIn <(ngsutilsj fastq-separate --read1 - $<1) <(ngsutilsj fastq-separate --read2 - $<1) \
         <% else %>
             --readFilesIn $<1 --readFilesCommand zcat \
         <% endif %>
@@ -245,7 +247,7 @@ else
         %>
         STAR --genomeDir ${ref} \
         <% if paired %>
-            --readFilesIn <(ngsutilsj fastq-separate -1 $<1) <(ngsutilsj fastq-separate -2 $<1) \
+            --readFilesIn <(ngsutilsj fastq-separate --read1 - $<1) <(ngsutilsj fastq-separate --read2 - $<1) \
         <% else %>
             --readFilesIn $<1 --readFilesCommand zcat \
         <% endif %>
