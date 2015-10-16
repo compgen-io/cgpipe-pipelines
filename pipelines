@@ -1,0 +1,6 @@
+print "Available pipelines:"
+print ""
+print "examples/test"
+print "examples/test2"
+print ""
+print "rnaseq/star"
