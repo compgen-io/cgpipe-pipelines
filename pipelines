@@ -1,6 +1,6 @@
-print "Available pipelines:"
-print ""
-print "examples/test"
-print "examples/test2"
-print ""
-print "rnaseq/star"
+# Available pipelines:
+#
+#   examples/test
+#   examples/test2
+#
+#   rnaseq/star
