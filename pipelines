@@ -1,0 +1,7 @@
+# Pipelines available here:
+#
+#   examples/test      -  Example "Hello world" pipeline
+#   examples/test2     -  Example pipeline with an included file
+#
+#   rnaseq/star        -  Align RNA FASTQ files using the STAR aligner
+#
